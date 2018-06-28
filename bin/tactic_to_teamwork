@@ -1,0 +1,123 @@
+#!/usr/bin/env ruby
+
+require 'thor'
+require 'fileutils'
+require 'time'
+
+require_relative '../models/importer.rb'
+
+class TacticToTeamwork < Thor
+
+  desc "import FILE_PATH.CSV ", "Import CSV file into Teamwork"
+  option :token, required: true
+  option :domain, required: true
+  def import(file_path)
+    self.configuration = {
+      file_path: file_path,
+      token: options[:token],
+      domain: "https://#{options[:domain]}.teamwork.com",
+      log_file_name: file_path_to_log_file_name(file_path)
+    }
+    self.log_file = create_log_file(configuration[:log_file_name])
+    log_configuration
+
+    begin
+      importer = Importer.new(configuration)
+      importer.prepare
+      importer.lines[:all].each { |line| log_line_status(line) }
+      confirm_import(importer.lines) or return
+      puts_and_log "Start Teamwork import..."
+      importer.run(
+        before: ->(line, url) { log_l line[:number], "POST #{url} #{line[:attributes].inspect}" },
+        after: ->(line, response) { log_import_response(line, response) },
+        error: ->(line, error) { log_error_l line[:number], "Error: #{error.inspect}, attributes: #{line[:attributes].inspect}"}
+      )
+      puts_and_log "Teamwork import ended"
+    ensure
+      log_file.close
+    end
+  end
+
+  private
+
+  attr_accessor :configuration, :log_file
+
+  def file_path_to_log_file_name(file_path)
+    time = Time.now.strftime("%Y%m%d-%H%M%S-%s")
+    name = File.basename(file_path, '.csv')
+    "#{time}_#{name}.txt"
+  end
+
+  def create_log_file(file_name)
+    path = File.join(File.dirname(__FILE__), '..', 'logs', file_name)
+    FileUtils.mkdir_p File.dirname(File.expand_path(path))
+    File.new path, 'w+'
+  end
+
+  def log_configuration
+    puts_and_log "---"
+    puts_and_log "File : '#{configuration[:file_path]}'"
+    puts_and_log "Token: '#{configuration[:token]}'"
+    puts_and_log "Domain : '#{configuration[:domain]}'"
+    puts_and_log "Log file : 'logs/#{configuration[:log_file_name]}'"
+    puts_and_log "---"
+  end
+
+  def log_line_status(line)
+    case line[:status]
+    when :skipped
+      log_warn_l line[:number], "Skip : Missing Teamwork task ID in entry title"
+    when :errored
+      line[:errors].each do |message|
+        log_error_l line[:number], message
+      end
+    end
+  end
+
+  def confirm_import(lines)
+    puts_and_log "#{lines[:validated].length}/#{lines[:all].length} valid row(s) (#{lines[:skipped].length} skipped, #{lines[:errored].length} errored)"
+    yes? "Do you want to start import ? (y/N)", :bold
+  end
+
+  def log_import_response(line, response)
+    case response.code
+    when 201
+      puts_l line[:number], "201 Created"
+      log_l line[:number], "  201 Created : #{response.body}"
+    when 401
+      puts_l line[:number], "401 Unauthorized"
+      log_error_l line[:number], "401 Unauthorized"
+    else
+      puts_l line[:number], "HTTP #{response.code}"
+      log_error_l line[:number], "HTTP #{response.code} : #{response.body}"
+    end
+  end
+
+  def puts_and_log(message)
+    puts message
+    log message
+  end
+
+  def puts_l(line_number, message)
+    puts "[L#{line_number}] #{message}"
+  end
+
+  def log(message)
+    log_file.write "[INFO] #{message}\n"
+  end
+
+  def log_l(line_number, message)
+    log_file.write "[L#{line_number}] [INFO] #{message}\n"
+  end
+
+  def log_warn_l(line_number, message)
+    log_file.write "[L#{line_number}] [WARNING] #{message}\n"
+  end
+
+  def log_error_l(line_number, message)
+    log_file.write "[L#{line_number}] [ERROR] #{message}\n"
+  end
+
+end
+
+TacticToTeamwork.start(ARGV)
