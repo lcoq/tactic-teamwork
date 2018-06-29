@@ -2,6 +2,12 @@
 
 Easily import Tactic times into Teamwork.
 
+## Prerequisites
+
+You'll need your Teamwork API token and the Teamwork site address :
+
+https://developer.teamwork.com/projects/finding-your-url-and-api-key/api-key-and-url
+
 ## Usage
 
 Start your Tactic entry titles with `[teamwork-project-id]`, or `[teamwork-project-id/teamwork-task-id]`.
