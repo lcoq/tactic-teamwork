@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 
 require 'thor'
-require 'fileutils'
 require 'time'
 
 require_relative '../models/importer.rb'
 require_relative '../models/reverter.rb'
+require_relative '../models/logger.rb'
 
 class TacticToTeamwork < Thor
 
@@ -19,7 +19,7 @@ class TacticToTeamwork < Thor
       domain: "https://#{options[:domain]}.teamwork.com",
       log_file_name: file_path_to_log_file_name(file_path)
     }
-    self.log_file = create_log_file(configuration[:log_file_name])
+    self.logger = start_logger(configuration[:log_file_name])
     log_import_configuration
 
     begin
@@ -29,13 +29,13 @@ class TacticToTeamwork < Thor
       confirm_import(importer.lines) or return
       puts_and_log "Start Teamwork import..."
       importer.run(
-        before: ->(line, url) { log_l line[:number], "POST #{url} #{line[:attributes].inspect}" },
+        before: ->(line, url) { logger.log_l line[:number], "POST #{url} #{line[:attributes].inspect}" },
         after: ->(line, response) { log_import_response(line, response) },
-        error: ->(line, error) { log_error_l line[:number], "Error: #{error.inspect}, attributes: #{line[:attributes].inspect}"}
+        error: ->(line, error) { logger.error_l line[:number], "Error: #{error.inspect}, attributes: #{line[:attributes].inspect}"}
       )
       puts_and_log "Teamwork import ended"
     ensure
-      log_file.close
+      logger.stop
     end
   end
 
@@ -45,7 +45,7 @@ class TacticToTeamwork < Thor
       file_path: log_file_path,
       log_file_name: file_path_to_log_file_name('_revert')
     }
-    self.log_file = create_log_file(configuration[:log_file_name])
+    self.logger = start_logger(configuration[:log_file_name])
 
     begin
       reverter = Reverter.new(log_file_path)
@@ -53,32 +53,41 @@ class TacticToTeamwork < Thor
       confirm_revert(reverter) or return
       puts_and_log "Start Teamwork revert..."
       reverter.run(
-        before: ->(entry, url) { log "POST #{url}" },
+        before: ->(entry, url) { logger.log "POST #{url}" },
         after: ->(entry, response) { log_revert_response(entry, response) },
-        error: ->(entry, error) { log_error "Error: #{error.inspect}, entry: #{entry.inspect}" }
+        error: ->(entry, error) { logger.error "Error: #{error.inspect}, entry: #{entry.inspect}" }
       )
       puts_and_log "Teamwork revert ended"
     ensure
-      log_file.close
+      logger.stop
     end
   end
 
   private
 
-  # Import
+  # Global
 
-  attr_accessor :configuration, :log_file
+  attr_accessor :configuration, :logger
+
+  def start_logger(file_name)
+    Logger.new(file_name).start
+  end
+
+  def puts_and_log(message)
+    puts message
+    logger.log message
+  end
+
+  def puts_l(line_number, message)
+    puts "[L#{line_number}] #{message}"
+  end
+
+  # Import
 
   def file_path_to_log_file_name(file_path, suffix_before_extension = '')
     time = Time.now.strftime("%Y%m%d-%H%M%S-%s")
     name = File.basename(file_path, '.csv')
     "#{time}_#{name}#{suffix_before_extension}.txt"
-  end
-
-  def create_log_file(file_name)
-    path = File.join(File.dirname(__FILE__), '..', 'logs', file_name)
-    FileUtils.mkdir_p File.dirname(File.expand_path(path))
-    File.new path, 'w+'
   end
 
   def log_import_configuration
@@ -93,10 +102,10 @@ class TacticToTeamwork < Thor
   def log_line_status(line)
     case line[:status]
     when :skipped
-      log_warn_l line[:number], "Skip : Missing Teamwork task ID in entry title"
+      logger.warn_l line[:number], "Skip : Missing Teamwork task ID in entry title"
     when :errored
       line[:errors].each do |message|
-        log_error_l line[:number], message
+        logger.error_l line[:number], message
       end
     end
   end
@@ -110,13 +119,13 @@ class TacticToTeamwork < Thor
     case response.code
     when 201
       puts_l line[:number], "201 Created"
-      log_l line[:number], "  201 Created : #{response.body}"
+      logger.log_l line[:number], "  201 Created : #{response.body}"
     when 401
       puts_l line[:number], "401 Unauthorized"
-      log_error_l line[:number], "401 Unauthorized"
+      logger.error_l line[:number], "401 Unauthorized"
     else
       puts_l line[:number], "HTTP #{response.code}"
-      log_error_l line[:number], "HTTP #{response.code} : #{response.body}"
+      logger.error_l line[:number], "HTTP #{response.code} : #{response.body}"
     end
   end
 
@@ -138,45 +147,14 @@ class TacticToTeamwork < Thor
     case response.code
     when 200
       puts "#{entry_prefix} 200 Deleted"
-      log "  #{entry_prefix} 200 Deleted : #{response.body}"
+      logger.log "  #{entry_prefix} 200 Deleted : #{response.body}"
     when 401
       puts "#{entry_prefix} 401 Unauthorized"
-      log_error "  #{entry_prefix} 401 Unauthorized"
+      logger.error "  #{entry_prefix} 401 Unauthorized"
     else
       puts "#{entry_prefix} HTTP #{response.code}"
-      log_error "  #{entry_prefix} HTTP #{response.code} : #{response.body}"
+      logger.error "  #{entry_prefix} HTTP #{response.code} : #{response.body}"
     end
-  end
-
-  # Global
-
-  def puts_and_log(message)
-    puts message
-    log message
-  end
-
-  def puts_l(line_number, message)
-    puts "[L#{line_number}] #{message}"
-  end
-
-  def log(message)
-    log_file.write "[INFO] #{message}\n"
-  end
-
-  def log_error(message)
-    log_file.write "[ERROR] #{message}\n"
-  end
-
-  def log_l(line_number, message)
-    log_file.write "[L#{line_number}] [INFO] #{message}\n"
-  end
-
-  def log_warn_l(line_number, message)
-    log_file.write "[L#{line_number}] [WARNING] #{message}\n"
-  end
-
-  def log_error_l(line_number, message)
-    log_file.write "[L#{line_number}] [ERROR] #{message}\n"
   end
 
 end
