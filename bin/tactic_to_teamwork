@@ -5,6 +5,7 @@ require 'fileutils'
 require 'time'
 
 require_relative '../models/importer.rb'
+require_relative '../models/reverter.rb'
 
 class TacticToTeamwork < Thor
 
@@ -19,7 +20,7 @@ class TacticToTeamwork < Thor
       log_file_name: file_path_to_log_file_name(file_path)
     }
     self.log_file = create_log_file(configuration[:log_file_name])
-    log_configuration
+    log_import_configuration
 
     begin
       importer = Importer.new(configuration)
@@ -38,14 +39,40 @@ class TacticToTeamwork < Thor
     end
   end
 
+  desc "revert LOG_FILE_PATH.txt", "Revert previous import through its log file"
+  def revert(log_file_path)
+    self.configuration = {
+      file_path: log_file_path,
+      log_file_name: file_path_to_log_file_name('_revert')
+    }
+    self.log_file = create_log_file(configuration[:log_file_name])
+
+    begin
+      reverter = Reverter.new(log_file_path)
+      reverter.prepare
+      confirm_revert(reverter) or return
+      puts_and_log "Start Teamwork revert..."
+      reverter.run(
+        before: ->(entry, url) { log "POST #{url}" },
+        after: ->(entry, response) { log_revert_response(entry, response) },
+        error: ->(entry, error) { log_error "Error: #{error.inspect}, entry: #{entry.inspect}" }
+      )
+      puts_and_log "Teamwork revert ended"
+    ensure
+      log_file.close
+    end
+  end
+
   private
+
+  # Import
 
   attr_accessor :configuration, :log_file
 
-  def file_path_to_log_file_name(file_path)
+  def file_path_to_log_file_name(file_path, suffix_before_extension = '')
     time = Time.now.strftime("%Y%m%d-%H%M%S-%s")
     name = File.basename(file_path, '.csv')
-    "#{time}_#{name}.txt"
+    "#{time}_#{name}#{suffix_before_extension}.txt"
   end
 
   def create_log_file(file_name)
@@ -54,7 +81,7 @@ class TacticToTeamwork < Thor
     File.new path, 'w+'
   end
 
-  def log_configuration
+  def log_import_configuration
     puts_and_log "---"
     puts_and_log "File : '#{configuration[:file_path]}'"
     puts_and_log "Token: '#{configuration[:token]}'"
@@ -93,6 +120,36 @@ class TacticToTeamwork < Thor
     end
   end
 
+  # Revert
+
+  def confirm_revert(reverter)
+    puts_and_log "---"
+    puts_and_log "File : '#{configuration[:file_path]}'"
+    puts_and_log "Token: '#{reverter.token}'"
+    puts_and_log "Domain : '#{reverter.domain}'"
+    puts_and_log "Time entries : #{reverter.time_entries.length}"
+    puts_and_log "Log file : 'logs/#{configuration[:log_file_name]}'"
+    puts_and_log "---"
+    yes? "Do you want to revert the import ? (y/N)", :bold
+  end
+
+  def log_revert_response(entry, response)
+    entry_prefix = "[#{entry[:id]}]"
+    case response.code
+    when 200
+      puts "#{entry_prefix} 200 Deleted"
+      log "  #{entry_prefix} 200 Deleted : #{response.body}"
+    when 401
+      puts "#{entry_prefix} 401 Unauthorized"
+      log_error "  #{entry_prefix} 401 Unauthorized"
+    else
+      puts "#{entry_prefix} HTTP #{response.code}"
+      log_error "  #{entry_prefix} HTTP #{response.code} : #{response.body}"
+    end
+  end
+
+  # Global
+
   def puts_and_log(message)
     puts message
     log message
@@ -104,6 +161,10 @@ class TacticToTeamwork < Thor
 
   def log(message)
     log_file.write "[INFO] #{message}\n"
+  end
+
+  def log_error(message)
+    log_file.write "[ERROR] #{message}\n"
   end
 
   def log_l(line_number, message)
