@@ -48,8 +48,8 @@ class Importer
 
   def attributes_from_row(row)
     title_with_prefix = row['title'].strip
-    match = title_with_prefix.match(/\A\[(\d+)(\/(\d+))*\]\s*(.*)\Z/)
-    return unless match
+    match = title_with_prefix.match(/\A\[(\d+)*(\/(\d+))*\]\s*(.*)\Z/)
+    return unless match && (match[1] || match[3])
     project_id = match[1]
     task_id = match[3]
     title_without_prefix = match[4]

@@ -6,6 +6,12 @@ Easily import Tactic times into Teamwork.
 
 Start your Tactic entry titles with `[teamwork-project-id]`, or `[teamwork-project-id/teamwork-task-id]`.
 
+Examples :
+
+* `[12345/67890] Import Tactic times into Teamwork tasks`
+* `[/67890] Import again Tactic times into Teamwork tasks`
+* `[12345] Import Tactic times into Teamwork project`
+
 Then, export your Tactic entries into a `tactic-entries.csv` and run the following command :
 
 ```sh
